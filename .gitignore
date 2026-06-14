@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+
+runs/
+outputs/
+evidence/
+logs/
+
+datasets/
+videos/
+
+venv/
+.env
+
+*.pt
