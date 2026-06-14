@@ -109,9 +109,9 @@ python dashboard.py
 ## Team Members
 
 * Harsha G Jain
-* (Add Team Member 2)
-* (Add Team Member 3)
-* (Add Team Member 4)
+* Akasha B Madiwal
+* Akshath kumar LK
+* ajay Sharma
 
 ## Conclusion
 
