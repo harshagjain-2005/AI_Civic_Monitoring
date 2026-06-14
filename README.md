@@ -1,45 +1,89 @@
-# AI Civic Monitoring System
+# 🚦 AI Civic Monitoring System
 
-## Project Overview
+An AI-powered surveillance system that automatically detects civic violations such as **Garbage Littering**, **Trespassing**, and **No-Parking Violations** using **YOLOv8**, **Computer Vision**, and **Real-Time Video Analytics**.
 
-The AI Civic Monitoring System is an intelligent surveillance-based solution that automatically detects civic rule violations using Artificial Intelligence and Computer Vision techniques. The system analyzes video streams in real time and identifies activities such as garbage littering, trespassing, and no-parking violations.
+---
 
-## Objective
+## 📌 Project Description
 
-The main objective of this project is to improve public safety and civic discipline by automatically monitoring public areas and generating alerts whenever a violation is detected.
+The AI Civic Monitoring System is designed to enhance public safety and civic discipline by continuously monitoring surveillance footage and identifying activities that violate civic regulations. The system uses deep learning-based object detection and video analysis techniques to generate alerts and evidence for detected violations.
 
-## Features
+By automating the monitoring process, the system reduces manual supervision efforts and enables smarter city management.
 
-* Real-time video surveillance
-* Garbage/Litter Detection
-* Trespassing Detection
-* No-Parking Violation Detection
-* YOLOv8-based object detection
-* Evidence image generation
-* Monitoring dashboard
-* Automated violation logging
+---
 
-## Technologies Used
+## 🎯 Objectives
 
-* Python
-* OpenCV
-* YOLOv8
-* Ultralytics
-* Flask
-* HTML, CSS, JavaScript
-* Chart.js
+* Detect civic violations automatically in real time.
+* Improve public safety and cleanliness.
+* Reduce manual surveillance efforts.
+* Generate evidence and violation records.
+* Provide a monitoring dashboard for authorities.
 
-## Dataset Used
+---
 
-The model is trained using custom datasets containing images of:
+## ✨ Key Features
 
-* Garbage and litter objects
-* Trespassing scenarios
-* Vehicles in no-parking zones
+### 🗑 Garbage / Litter Detection
 
-The datasets were annotated in YOLO format and used for training the detection models.
+Detects littering activities and identifies garbage objects in monitored areas.
 
-## Project Structure
+### 🚷 Trespassing Detection
+
+Detects unauthorized entry into restricted or protected zones.
+
+### 🚗 No-Parking Violation Detection
+
+Monitors parking-restricted areas and identifies illegally parked vehicles.
+
+### 📹 Real-Time Monitoring
+
+Processes live webcam or CCTV video feeds.
+
+### 📊 Dashboard Visualization
+
+Displays violation statistics, alerts, and monitoring information.
+
+### 📁 Evidence Storage
+
+Automatically saves snapshots of detected violations for future reference.
+
+---
+
+## 🛠 Technologies Used
+
+| Technology  | Purpose                  |
+| ----------- | ------------------------ |
+| Python      | Core Development         |
+| OpenCV      | Image & Video Processing |
+| YOLOv8      | Object Detection         |
+| Ultralytics | YOLO Framework           |
+| Flask       | Web Application Backend  |
+| HTML/CSS    | Frontend Interface       |
+| JavaScript  | Dashboard Functionality  |
+| Chart.js    | Data Visualization       |
+
+---
+
+## 🧠 System Architecture
+
+Input Video Stream
+↓
+Frame Extraction
+↓
+YOLOv8 Object Detection
+↓
+Violation Detection Module
+↓
+Alert Generation
+↓
+Evidence Storage
+↓
+Dashboard Monitoring
+
+---
+
+## 📂 Project Structure
 
 AI_Civic_Monitoring/
 
@@ -55,6 +99,8 @@ AI_Civic_Monitoring/
 
 ├── logs/
 
+├── runs/
+
 ├── videos/
 
 ├── dashboard.py
@@ -67,52 +113,138 @@ AI_Civic_Monitoring/
 
 ├── webcam_detect.py
 
-└── requirements.txt
+├── trespassing_detect.py
 
-## How to Run
+├── noparking_detect.py
 
-### 1. Install Dependencies
+├── requirements.txt
 
+└── README.md
+
+---
+
+## ⚙️ Installation
+
+### Clone Repository
+
+```bash
+git clone https://github.com/harshagjain-2005/AI_Civic_Monitoring.git
+cd AI_Civic_Monitoring
+```
+
+### Install Dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-### 2. Train the Model
+---
 
+## 🚀 Usage
+
+### Train Model
+
+```bash
 python train.py
+```
 
-### 3. Test the Model
+### Test Model
 
+```bash
 python predict.py
+```
 
-### 4. Run Real-Time Detection
+### Run Real-Time Detection
 
+```bash
 python webcam_detect.py
+```
 
-### 5. Launch Dashboard
+### Launch Dashboard
 
+```bash
 python dashboard.py
+```
 
-## Expected Output
+---
 
-* Detection of civic violations in real time
-* Alert generation
-* Evidence image storage
-* Dashboard-based monitoring and statistics
+## 📊 Dataset Information
 
-## Future Enhancements
+The system is trained using custom annotated datasets in YOLO format.
 
-* Integration with CCTV networks
-* Mobile notification system
-* Cloud-based monitoring
-* Multi-camera support
-* Advanced analytics and reporting
+### Classes Used
 
-## Team Members
+#### Garbage Detection
+
+* Can
+* Plastic Bottle
+* Plastic Bottle Cap
+* Plastic Cover
+* Thermocol
+* Mask
+* Lifesaver
+* Wood
+
+#### Trespassing Detection
+
+* Person
+* Restricted Zone
+
+#### No-Parking Detection
+
+* Car
+* Motorcycle
+* Vehicle
+
+---
+
+## 📈 Expected Outcomes
+
+* Real-time civic violation detection.
+* Automated monitoring of public spaces.
+* Reduced dependency on manual surveillance.
+* Digital evidence collection.
+* Improved civic awareness and enforcement.
+
+---
+
+## 🔮 Future Enhancements
+
+* Integration with Smart City Infrastructure.
+* Multi-Camera Support.
+* Cloud-Based Monitoring.
+* Mobile Application Integration.
+* SMS / Email Alert System.
+* License Plate Recognition.
+* AI-Based Analytics and Reporting.
+
+---
+
+## 👨‍💻 Team Members
 
 * Harsha G Jain
-* Akasha B Madiwal
-* Akshath kumar LK
-* ajay Sharma
+* Akash B Madiwal
+* Akshath Kumar L K
+* Ajay Sharma
 
-## Conclusion
+---
 
-The AI Civic Monitoring System demonstrates how Artificial Intelligence can be utilized to automatically monitor public spaces and promote civic responsibility through real-time violation detection and reporting.
+## 🎓 Academic Information
+
+**Project Title:** AI Civic Monitoring System
+
+**Domain:** Artificial Intelligence & Computer Vision
+
+**Technology Stack:** YOLOv8, OpenCV, Flask, Python
+
+**Project Type:** Major Project
+
+---
+
+## 📜 Conclusion
+
+The AI Civic Monitoring System demonstrates the practical application of Artificial Intelligence and Computer Vision in creating smarter and safer public environments. By automatically detecting civic violations and generating actionable insights, the system contributes toward efficient urban management and responsible civic behavior.
+
+---
+
+⭐ If you found this project useful, consider giving it a star on GitHub.
