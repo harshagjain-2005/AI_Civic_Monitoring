@@ -26,7 +26,7 @@ def log_alert(message):
 # WEBCAM
 # ==========================
 
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 
 last_garbage_save = 0
 last_trespass_save = 0
@@ -73,7 +73,7 @@ while True:
     # GARBAGE DETECTION
     # ==========================
 
-    garbage_results = garbage_model(frame, conf=0.5)
+    garbage_results = garbage_model(frame)
 
     for result in garbage_results:
         for box in result.boxes:
@@ -117,7 +117,7 @@ while True:
     # PERSON + VEHICLE DETECTION
     # ==========================
 
-    coco_results = coco_model(frame, conf=0.5)
+    coco_results = coco_model(frame)
 
     trespassing = False
     noparking = False

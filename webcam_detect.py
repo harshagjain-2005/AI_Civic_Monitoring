@@ -15,7 +15,7 @@ def log_alert(message):
 model = YOLO("runs/detect/train/weights/best.pt")
 
 # Start webcam
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 last_saved_time = 0
 
 while True:
@@ -26,7 +26,7 @@ while True:
         break
 
     # Run YOLO detection
-    results = model(frame, conf=0.5)
+    results = model(frame,conf=0.5)
 
     # Draw bounding boxes
     annotated_frame = results[0].plot()

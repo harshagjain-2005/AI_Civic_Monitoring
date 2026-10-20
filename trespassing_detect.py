@@ -15,7 +15,7 @@ def log_alert(message):
 model = YOLO("yolov8n.pt")
 
 # Open webcam
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 last_saved_time = 0
 
 # Restricted Zone Coordinates
@@ -39,7 +39,7 @@ while True:
         2
     )
 
-    results = model(frame, conf=0.5)
+    results = model(frame)
 
     for result in results:
         boxes = result.boxes

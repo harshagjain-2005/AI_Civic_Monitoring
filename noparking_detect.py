@@ -15,7 +15,7 @@ def log_alert(message):
 model = YOLO("yolov8n.pt")
 
 # Open webcam
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 last_saved_time = 0
 
 # No-parking zone coordinates
@@ -27,7 +27,7 @@ while True:
     if not ret:
         break
 
-    results = model(frame, conf=0.5)
+    results = model(frame)
 
     # Draw no-parking zone
     cv2.rectangle(frame, (ZONE_X1, ZONE_Y1), (ZONE_X2, ZONE_Y2), (0, 0, 255), 2)
