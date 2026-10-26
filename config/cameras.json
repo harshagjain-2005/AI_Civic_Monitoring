@@ -1,0 +1,77 @@
+{
+  "_comment": "CivicGuard — Public Camera Feed Configuration",
+  "_legal": "Only intentionally public, government-published camera feeds. No private cameras, no auth bypass, no scanning.",
+  "_note": "These URLs reference official government DOT infrastructure or open test infrastructure. URLs may change over time; replace with a working public HLS URL from your regional DOT or 511 system if any entry becomes unavailable.",
+
+  "demo_streams": [
+    {
+      "id": "demo_hls_test",
+      "name": "Demo: HLS Test Stream (Mux Dev — always available)",
+      "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+      "type": "stream",
+      "format": "HLS",
+      "public": true,
+      "requires_auth": false,
+      "notes": "Public HLS test stream from Mux.com infrastructure. Always online. Not a real traffic camera — use this first to verify your pipeline and zone calibration work before connecting a real feed.",
+      "fps_cap": 10,
+      "reconnect_interval": 5,
+      "max_reconnects": 20,
+      "enabled": true
+    },
+    {
+      "id": "iowa_dot_1",
+      "name": "Iowa DOT — Cedar Rapids Traffic Camera (511ia.org)",
+      "url": "https://video3.iowadot.gov:8888/cedarrapids/d6tv06lb/playlist.m3u8",
+      "type": "stream",
+      "format": "HLS",
+      "public": true,
+      "requires_auth": false,
+      "notes": "Official Iowa Department of Transportation traffic camera. Publicly accessible — part of the 511ia.org system. May be briefly offline during maintenance windows. If unavailable, try another iowadot.gov stream or use the Mux test stream.",
+      "fps_cap": 8,
+      "reconnect_interval": 8,
+      "max_reconnects": 15,
+      "enabled": true
+    },
+    {
+      "id": "caltrans_d4_1",
+      "name": "Caltrans District 4 — Bay Area Freeway Camera",
+      "url": "http://wzmedia.dot.ca.gov/D4/S880_at_Paseo_Grande_OC.stream/playlist.m3u8",
+      "type": "stream",
+      "format": "HLS",
+      "public": true,
+      "requires_auth": false,
+      "notes": "Official California DOT (Caltrans) District 4 traffic camera on I-880 in the San Francisco Bay Area. Publicly embedded on quickmap.dot.ca.gov. HTTP (not HTTPS). Resolution typically 480p H.264. May occasionally return 403 on specific load-balancer nodes — if it fails, retry after a few seconds or switch to another source.",
+      "fps_cap": 8,
+      "reconnect_interval": 8,
+      "max_reconnects": 10,
+      "enabled": true
+    },
+    {
+      "id": "custom",
+      "name": "Custom URL (enter below)",
+      "url": "",
+      "type": "stream",
+      "format": "HLS / MJPEG / RTSP",
+      "public": true,
+      "requires_auth": false,
+      "notes": "Enter any public HLS (.m3u8), MJPEG over HTTP, or RTSP stream URL you are authorized to access. Example sources: US state DOT / 511 systems, official city traffic portals, publicly published government streams.",
+      "fps_cap": 10,
+      "reconnect_interval": 5,
+      "max_reconnects": 20,
+      "enabled": true
+    }
+  ],
+
+  "default_fps_cap": 10,
+  "default_reconnect_interval": 5,
+  "default_max_reconnects": 20,
+
+  "_how_to_find_more_streams": [
+    "1. US State DOTs: Check 511<state>.gov or <state>dot.gov for live traffic camera pages. Open DevTools > Network > filter by .m3u8 to find the stream URL.",
+    "2. Iowa DOT: https://511ia.org (iowadot.gov HLS streams)",
+    "3. Caltrans: https://quickmap.dot.ca.gov (wzmedia.dot.ca.gov HLS streams)",
+    "4. Wisconsin DOT: https://511wi.gov (cctv1.dot.wi.gov HLS streams)",
+    "5. GitHub dataset: https://github.com/william-ricchiuti/Live-Environment-Streams (5000+ public webcam GeoJSON)",
+    "6. GitHub dataset: https://github.com/AidanWelch/OpenTrafficCamMap (open traffic cam database)"
+  ]
+}

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Smart Civic Monitoring — Canonical Runtime
 ============================================================
 Single entry point for the AI Civic Monitoring System.
@@ -42,6 +42,34 @@ from datetime import datetime
 import numpy as np
 
 # ============================================================
+# VIDEO SOURCE ABSTRACTION (video_source.py)
+# ============================================================
+# Provides a unified VideoSource that wraps webcam, local video
+# file, and public live streams (HLS/MJPEG/RTSP) behind a
+# single open/read/release interface, with automatic reconnection
+# for stream failures.
+
+try:
+    from video_source import (
+        VideoSource, make_video_source,
+        SOURCE_WEBCAM, SOURCE_FILE, SOURCE_STREAM,
+    )
+    _VIDEO_SOURCE_AVAILABLE = True
+except ImportError as _vs_err:
+    _VIDEO_SOURCE_AVAILABLE = False
+    SOURCE_WEBCAM = "webcam"
+    SOURCE_FILE   = "file"
+    SOURCE_STREAM = "stream"
+    print(f"[WARN] video_source.py not found: {_vs_err}. "
+          f"Multi-source support unavailable; webcam-only mode.")
+
+# Path to the camera presets configuration file
+CAMERAS_CONFIG_FILE = os.environ.get(
+    "CIVICGUARD_CAMERAS_CONFIG",
+    os.path.join("config", "cameras.json")
+)
+
+# ============================================================
 # OPTIONAL / GUARDED IMPORT: ultralytics
 # ============================================================
 # Model loading can fail (missing weights, missing GPU/torch issues,
@@ -80,6 +108,9 @@ VEHICLE_CONFIDENCE = 0.55
 _COCO_CALL_CONFIDENCE = min(PERSON_CONFIDENCE, VEHICLE_CONFIDENCE)
 
 VEHICLE_LABELS = ("car", "motorcycle", "bus", "truck")
+NOPARK_DEBUG = os.environ.get("CIVICGUARD_NOPARK_DEBUG", "").lower() in (
+    "1", "true", "yes", "on"
+)
 
 # ============================================================
 # CONFIGURATION — TEMPORAL VERIFICATION
@@ -96,6 +127,7 @@ VERIFY_FRAMES = 10                # trespass/no-parking: consecutive frames insi
 PERSON_GARBAGE_DISTANCE_RATIO = 0.18   # association distance, normalized to frame width
 SEPARATION_DISTANCE_RATIO = 0.25       # separation distance, normalized to frame width
 STATIONARY_MOVEMENT_PIXELS = 25        # max frame-to-frame garbage movement to count as "stationary"
+STATIONARY_WINDOW_FRAMES = 10          # recent footpoint window used to absorb tracker jitter
 
 EVIDENCE_COOLDOWN = 5              # seconds between evidence saves for the same continuous event
 
@@ -804,11 +836,25 @@ trespass_tracks = {}
 nopark_tracks = {}
 
 
-def update_zone_track(track_state, track_id, inside, confidence, evidence_cooldown_ok):
+def update_zone_track(
+    track_state,
+    track_id,
+    inside,
+    confidence,
+    evidence_cooldown_ok,
+    reference_point=None,
+    require_stationary=False,
+):
     """Advances one tracked object's zone-persistence state machine
     for the current frame. Returns (verified_now, entry) where
     verified_now is True only on the single frame verification is
-    first reached for this continuous stay (duplicate-prevention)."""
+    first reached for this continuous stay (duplicate-prevention).
+
+    When requested, ``reference_point`` is tracked across frames and
+    verification additionally requires the object to remain within the
+    configured movement threshold. This is used for No Parking so a
+    moving vehicle passing through the zone is not treated as parked.
+    """
 
     if track_id not in track_state:
         track_state[track_id] = {
@@ -816,6 +862,9 @@ def update_zone_track(track_state, track_id, inside, confidence, evidence_cooldo
             "missed_frames": 0,
             "verified": False,
             "confidence_history": deque(maxlen=30),
+            "position_history": deque(maxlen=30),
+            "stationary_frames": 0,
+            "last_movement": None,
             "last_event_time": 0,
         }
 
@@ -825,13 +874,46 @@ def update_zone_track(track_state, track_id, inside, confidence, evidence_cooldo
         entry["frames_inside"] += 1
         entry["missed_frames"] = 0
         entry["confidence_history"].append(confidence)
+
+        if reference_point is not None:
+            entry["position_history"].append(reference_point)
+            if len(entry["position_history"]) > 1:
+                entry["last_movement"] = distance(
+                    reference_point, entry["position_history"][-2]
+                )
+
+            recent_positions = list(entry["position_history"])[-STATIONARY_WINDOW_FRAMES:]
+            recent_array = np.array(recent_positions, dtype=np.float32)
+            anchor = (
+                recent_array.min(axis=0) + recent_array.max(axis=0)
+            ) / 2.0
+            envelope_radius = max(
+                distance(tuple(position), tuple(anchor))
+                for position in recent_positions
+            )
+            if envelope_radius <= STATIONARY_MOVEMENT_PIXELS:
+                entry["stationary_frames"] += 1
+            else:
+                entry["stationary_frames"] = 0
     else:
         entry["frames_inside"] = 0
         entry["verified"] = False
+        entry["stationary_frames"] = 0
+        entry["last_movement"] = None
+        entry["position_history"].clear()
 
     verified_now = False
 
-    if entry["frames_inside"] >= VERIFY_FRAMES and not entry["verified"]:
+    stationary_ok = (
+        not require_stationary
+        or entry["stationary_frames"] >= MIN_STATIONARY_FRAMES
+    )
+
+    if (
+        entry["frames_inside"] >= VERIFY_FRAMES
+        and stationary_ok
+        and not entry["verified"]
+    ):
         entry["verified"] = True
         verified_now = True
 
@@ -854,6 +936,40 @@ def decay_missing_tracks(track_state, seen_ids):
         if entry["missed_frames"] > TRACK_GRACE_FRAMES:
             entry["frames_inside"] = 0
             entry["verified"] = False
+            entry["stationary_frames"] = 0
+            entry["last_movement"] = None
+            entry["position_history"].clear()
+
+
+def log_nopark_debug(vehicle, inside, entry, verified_now, reason=None):
+    if not NOPARK_DEBUG:
+        return
+
+    if reason is None:
+        if not inside:
+            reason = "footpoint_outside_zone"
+        elif entry["frames_inside"] < VERIFY_FRAMES:
+            reason = "dwell_not_reached"
+        elif entry["stationary_frames"] < MIN_STATIONARY_FRAMES:
+            reason = "stationary_threshold_not_reached"
+        elif not verified_now:
+            reason = "already_verified"
+        else:
+            reason = "verified"
+
+    print(
+        "[NOPARK] "
+        f"track_id={vehicle['id']} source={vehicle.get('track_source', 'unknown')} "
+        f"class={vehicle['label']} "
+        f"confidence={vehicle['confidence']:.3f} bbox={vehicle['bbox']} "
+        f"footpoint={vehicle['ground_point']} inside={inside} "
+        f"movement={entry.get('last_movement')} "
+        f"stationary_frames={entry['stationary_frames']}/"
+        f"{MIN_STATIONARY_FRAMES} "
+        f"dwell_frames={entry['frames_inside']}/{VERIFY_FRAMES} "
+        f"verified={entry['verified']} verified_now={verified_now} "
+        f"reason={reason}"
+    )
 
 
 # ============================================================
@@ -896,16 +1012,26 @@ else:
 # ============================================================
 
 camera_running = False
-cap = None
+cap = None                  # kept as alias; points to video_source_obj._cap
 _camera_lock = threading.Lock()
 
+# --- Video Source abstraction state ---
+video_source_obj = None                 # VideoSource instance or None
+current_source_type  = SOURCE_WEBCAM   # "webcam" | "file" | "stream"
+current_source_label = "Webcam"        # human-readable name for UI
+current_source_url   = ""              # URL or path (empty for webcam 0)
+_live_processing_thread = None
+_live_processing_stop = threading.Event()
+_live_frame_event = threading.Event()
+_live_frame_lock = threading.Lock()
+_live_input_frame = None
+_live_output_frame = None
+_latest_camera_frame = None
+
 last_alert = "No Active Alerts"
-# Restore the last known verified event on startup/restart so the
-# Active Event panel reflects reality (the last real verification)
-# rather than blanking out just because the process restarted.
-active_event = violation_history[-1] if violation_history else None
-if active_event:
-    last_alert = f"{active_event['violation']} VERIFIED"
+# Active events are session-scoped; persisted history remains available
+# in the archive but must not populate the live monitoring panel.
+active_event = None
 
 last_garbage_save = 0
 last_trespass_save = 0
@@ -917,9 +1043,102 @@ def _reset_tracking_state():
     session begins with a clean verification state rather than
     carrying over stale associations/counters from a previous run."""
 
+    global last_garbage_save, last_trespass_save, last_nopark_save
+
     garbage_tracks.clear()
     trespass_tracks.clear()
     nopark_tracks.clear()
+    last_garbage_save = 0
+    last_trespass_save = 0
+    last_nopark_save = 0
+
+
+def _live_processing_loop():
+    """Processes only the newest pending stream frame."""
+    global _live_input_frame, _live_output_frame
+
+    while not _live_processing_stop.is_set():
+        if not _live_frame_event.wait(0.5):
+            continue
+
+        with _live_frame_lock:
+            frame = _live_input_frame
+            _live_input_frame = None
+            _live_frame_event.clear()
+
+        if frame is None:
+            continue
+
+        try:
+            processed = process_frame(frame)
+        except Exception as e:
+            print(f"[WARN] live frame processing error: {e}")
+            processed = frame
+
+        with _live_frame_lock:
+            _live_output_frame = processed
+
+
+def _start_live_processing():
+    """Starts the single stream-only detection worker."""
+    global _live_processing_thread, _live_input_frame, _live_output_frame
+
+    _live_processing_stop.clear()
+    _live_frame_event.clear()
+    with _live_frame_lock:
+        _live_input_frame = None
+        _live_output_frame = None
+    _live_processing_thread = threading.Thread(
+        target=_live_processing_loop,
+        name="live-frame-processing",
+        daemon=True,
+    )
+    _live_processing_thread.start()
+
+
+def _stop_live_processing():
+    """Stops the stream-only detection worker and clears its frames."""
+    global _live_processing_thread, _live_input_frame, _live_output_frame
+
+    _live_processing_stop.set()
+    _live_frame_event.set()
+    if _live_processing_thread is not None:
+        _live_processing_thread.join()
+        _live_processing_thread = None
+    with _live_frame_lock:
+        _live_input_frame = None
+        _live_output_frame = None
+    _live_frame_event.clear()
+
+
+def _submit_live_frame(frame):
+    """Replaces any pending stream frame instead of queueing a backlog."""
+    global _live_input_frame
+
+    with _live_frame_lock:
+        _live_input_frame = frame
+        _live_frame_event.set()
+
+
+def _latest_live_output():
+    with _live_frame_lock:
+        return _live_output_frame
+
+
+# ============================================================
+# CAMERAS CONFIG LOADER
+# ============================================================
+
+def load_cameras_config():
+    """Loads config/cameras.json for the public stream presets list."""
+    try:
+        if os.path.exists(CAMERAS_CONFIG_FILE):
+            with open(CAMERAS_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"[WARN] Could not load {CAMERAS_CONFIG_FILE}: {e}")
+    return {"demo_streams": [], "default_fps_cap": 10,
+            "default_reconnect_interval": 5, "default_max_reconnects": 20}
 
 
 # ============================================================
@@ -1025,10 +1244,22 @@ def run_person_vehicle_detection(frame):
                 })
 
             elif label in VEHICLE_LABELS:
+                if NOPARK_DEBUG:
+                    print(
+                        "[NOPARK] detection "
+                        f"track_id={track_id} class={label} "
+                        f"confidence={confidence:.3f} bbox={bbox}"
+                    )
                 if confidence < VEHICLE_CONFIDENCE:
+                    if NOPARK_DEBUG:
+                        print(
+                            "[NOPARK] rejected reason=vehicle_confidence_below_threshold "
+                            f"required={VEHICLE_CONFIDENCE:.3f}"
+                        )
                     continue
                 vehicles.append({
                     "id": track_id if track_id is not None else center[0] * 10000 + center[1],
+                    "track_source": "bytetrack" if track_id is not None else "fallback_position",
                     "bbox": bbox,
                     "center": center,
                     "ground_point": vehicle_ground_point(bbox),
@@ -1125,10 +1356,16 @@ def process_frame(frame):
     """Runs detection + verification for one frame, draws overlays,
     and creates verified events as appropriate. Returns the annotated
     frame. Safe to call even if models failed to load (skips
-    detection, still draws zones so the operator can see the feed)."""
+    detection, still draws zones so the operator can see the feed).
+    The camera/source layer may provide a read-only NumPy view, while
+    the overlay pipeline performs in-place OpenCV operations."""
 
     global last_garbage_save, last_trespass_save, last_nopark_save
 
+    # OpenCV drawing and compositing functions below write into `frame`.
+    # Normalize the source boundary once so webcam, file, and stream
+    # frames all have the same writable behavior.
+    frame = frame.copy()
     frame_height, frame_width = frame.shape[:2]
     now = time.time()
 
@@ -1224,26 +1461,33 @@ def process_frame(frame):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
 
     # -------------------- TRESPASSING PIPELINE --------------------
+    # Both tracked people and vehicles use their ground-contact point
+    # for the restricted-zone test. This keeps trespassing independent
+    # from the no-parking stationary requirement.
 
-    seen_person_ids = set()
+    seen_trespass_ids = set()
 
-    for p in persons:
-        seen_person_ids.add(p["id"])
-        inside = point_in_zone(p["ground_point"], TRESPASS_ZONE)
+    for trespass_object in persons + vehicles:
+        seen_trespass_ids.add(trespass_object["id"])
+        inside = point_in_zone(trespass_object["ground_point"], TRESPASS_ZONE)
 
         verified_now, entry = update_zone_track(
-            trespass_tracks, p["id"], inside, p["confidence"], None
+            trespass_tracks,
+            trespass_object["id"],
+            inside,
+            trespass_object["confidence"],
+            None,
         )
 
         if inside:
             cv2.putText(frame, f"IN ZONE ({entry['frames_inside']})",
-                        (p["bbox"][0], p["bbox"][1] - 10),
+                        (trespass_object["bbox"][0], trespass_object["bbox"][1] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
         if verified_now and (now - last_trespass_save) >= EVIDENCE_COOLDOWN:
             avg_confidence = (
                 sum(entry["confidence_history"]) / len(entry["confidence_history"])
-                if entry["confidence_history"] else p["confidence"]
+                if entry["confidence_history"] else trespass_object["confidence"]
             )
             risk = calculate_risk(avg_confidence, entry["frames_inside"], context_score=1.0)
 
@@ -1253,7 +1497,7 @@ def process_frame(frame):
                 confidence=avg_confidence,
                 risk=risk,
                 frame=frame,
-                bbox=p["bbox"],
+                bbox=trespass_object["bbox"],
                 persistence=entry["frames_inside"],
                 association=None,
                 evidence_dir="trespassing",
@@ -1265,7 +1509,7 @@ def process_frame(frame):
             cv2.putText(frame, "TRESPASSING VERIFIED", (30, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
 
-    decay_missing_tracks(trespass_tracks, seen_person_ids)
+    decay_missing_tracks(trespass_tracks, seen_trespass_ids)
 
     # -------------------- NO-PARKING PIPELINE --------------------
 
@@ -1276,15 +1520,28 @@ def process_frame(frame):
         inside = point_in_zone(v["ground_point"], NO_PARKING_ZONE)
 
         verified_now, entry = update_zone_track(
-            nopark_tracks, v["id"], inside, v["confidence"], None
+            nopark_tracks,
+            v["id"],
+            inside,
+            v["confidence"],
+            None,
+            reference_point=v["ground_point"],
+            require_stationary=True,
         )
+        log_nopark_debug(v, inside, entry, verified_now)
 
         if inside:
-            cv2.putText(frame, f"IN ZONE ({entry['frames_inside']})",
-                        (v["bbox"][0], v["bbox"][1] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            cv2.putText(
+                frame,
+                f"IN ZONE ({entry['frames_inside']}) "
+                f"STILL ({entry['stationary_frames']})",
+                (v["bbox"][0], v["bbox"][1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2,
+            )
 
-        if verified_now and (now - last_nopark_save) >= EVIDENCE_COOLDOWN:
+        # `verified` is per ByteTrack ID, so a global evidence cooldown
+        # must not suppress a different vehicle's first verified event.
+        if verified_now:
             avg_confidence = (
                 sum(entry["confidence_history"]) / len(entry["confidence_history"])
                 if entry["confidence_history"] else v["confidence"]
@@ -1320,38 +1577,138 @@ def process_frame(frame):
 
 @app.route("/start")
 def start_monitoring():
+    """Start monitoring from the selected video source.
 
-    global camera_running, cap
+    Query parameters (all optional):
+      source_type  : "webcam" | "file" | "stream"  (default: "webcam")
+      source_url   : file path or stream URL        (default: "" → webcam 0)
+      camera_name  : display label                  (default: auto)
+      fps_cap      : int, frames/sec cap for streams (default: 10)
+    """
+    global camera_running, cap, video_source_obj, _latest_camera_frame
+    global current_source_type, current_source_label, current_source_url
 
+    src_type  = request.args.get("source_type",  SOURCE_WEBCAM).strip()
+    src_url   = request.args.get("source_url",   "").strip()
+    cam_name  = request.args.get("camera_name",  "").strip()
+    fps_cap   = int(request.args.get("fps_cap",  10))
+
+    # Validate source_type
+    if src_type not in (SOURCE_WEBCAM, SOURCE_FILE, SOURCE_STREAM):
+        src_type = SOURCE_WEBCAM
+
+    # Build the VideoSource (or fall back to bare cv2.VideoCapture)
     with _camera_lock:
-        if not camera_running:
+        if camera_running:
+            return redirect("/")
 
+        with _live_frame_lock:
+            _latest_camera_frame = None
+
+        if _VIDEO_SOURCE_AVAILABLE:
+            # Determine the URI to pass to make_video_source
+            if src_type == SOURCE_WEBCAM:
+                uri = 0
+                label = cam_name or "Webcam [0]"
+            elif src_type == SOURCE_FILE:
+                uri = src_url or ""
+                label = cam_name or (os.path.basename(src_url) if src_url else "Video File")
+            else:  # stream
+                uri = src_url or ""
+                label = cam_name or "Public Live Stream"
+
+            cams_cfg = load_cameras_config()
+            reconnect_interval = float(
+                cams_cfg.get("default_reconnect_interval", 5))
+            max_reconnects = int(
+                cams_cfg.get("default_max_reconnects", 20))
+
+            # Set FFmpeg low-latency flags for stream sources BEFORE
+            # creating VideoCapture — reduces buffering delay on HLS
+            if src_type == SOURCE_STREAM:
+                os.environ.setdefault(
+                    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+                    "fflags;nobuffer|flags;low_delay|rtsp_transport;tcp"
+                )
+
+            try:
+                src = make_video_source(
+                    source_type=src_type,
+                    source_uri=uri,
+                    camera_name=label,
+                    fps_cap=fps_cap if src_type == SOURCE_STREAM else 0,
+                    reconnect_interval=reconnect_interval,
+                    max_reconnects=max_reconnects,
+                )
+            except Exception as e:
+                print(f"[WARN] Could not create VideoSource: {e}")
+                if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.accept_mimetypes.best == "application/json":
+                    return jsonify(ok=False, error="Could not create VideoSource"), 500
+                return redirect("/")
+
+            opened = src.open()
+            if not opened:
+                print(f"[WARN] VideoSource '{label}' could not be opened.")
+                src.release()
+                if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.accept_mimetypes.best == "application/json":
+                    return jsonify(ok=False, error="Stream could not be opened"), 500
+                return redirect("/")
+
+            _reset_tracking_state()
+            video_source_obj = src
+            cap = src._cap   # keep cap alias for snapshot endpoint
+            camera_running = True
+            current_source_type  = src_type
+            current_source_label = label
+            current_source_url   = str(uri)
+            if src_type == SOURCE_STREAM:
+                _start_live_processing()
+
+        else:
+            # Fallback: original bare cv2.VideoCapture(0) if
+            # video_source.py is missing
             new_cap = cv2.VideoCapture(0)
-
             if not new_cap.isOpened():
                 print("[WARN] Camera could not be opened (device unavailable).")
                 new_cap.release()
                 return redirect("/")
-
             cap = new_cap
             camera_running = True
+            current_source_type  = SOURCE_WEBCAM
+            current_source_label = "Webcam [0]"
+            current_source_url   = ""
+
+        if not _VIDEO_SOURCE_AVAILABLE:
             _reset_tracking_state()
 
+    # Return JSON for AJAX callers; redirect for legacy link navigation
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.accept_mimetypes.best == "application/json":
+        return jsonify(ok=True, source_type=current_source_type, source_label=current_source_label)
     return redirect("/")
 
 
 @app.route("/stop")
 def stop_monitoring():
 
-    global camera_running, cap
+    global camera_running, cap, video_source_obj, _latest_camera_frame
 
     with _camera_lock:
         camera_running = False
 
-        if cap is not None:
+        if video_source_obj is not None:
+            if current_source_type == SOURCE_STREAM:
+                _stop_live_processing()
+            video_source_obj.release()
+            video_source_obj = None
+        elif cap is not None:
             cap.release()
-            cap = None
 
+        cap = None
+        with _live_frame_lock:
+            _latest_camera_frame = None
+
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.accept_mimetypes.best == "application/json":
+        return jsonify(ok=True)
     return redirect("/")
 
 
@@ -1406,48 +1763,106 @@ def template_evidence_url(event_or_path, category=None):
 # ============================================================
 
 def generate_frames():
+    """MJPEG frame generator.
 
-    global cap, camera_running
+    Uses VideoSource.read() when available — this handles
+    automatic reconnection for stream sources internally.
+    Falls back to direct cap.read() if VideoSource is not loaded.
+    """
+    global cap, camera_running, video_source_obj, _latest_camera_frame
 
     while True:
 
-        if not camera_running or cap is None:
+        if not camera_running:
             blank = 255 * np.ones((480, 640, 3), dtype="uint8")
             cv2.putText(blank, "CAMERA OFFLINE", (170, 240),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (60, 60, 60), 2)
+            cv2.putText(blank, "Select a source and click Start", (130, 280),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 100, 100), 1)
             ret, buffer = cv2.imencode(".jpg", blank)
             frame_bytes = buffer.tobytes()
             yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
             time.sleep(0.3)
             continue
 
-        try:
-            success, frame = cap.read()
-        except Exception as e:
-            print(f"[WARN] camera read failed: {e}")
-            success = False
-            frame = None
+        # --- Read next frame ---
+        success = False
+        frame   = None
 
-        if not success or frame is None:
-            # Camera disconnected mid-session: stop cleanly rather
-            # than crashing the generator / Flask worker.
-            print("[WARN] camera disconnected; stopping monitoring.")
+        if video_source_obj is not None:
+            # VideoSource path: handles reconnect internally
+            success, frame = video_source_obj.read()
+
+            if not success or frame is None:
+                vs_status = getattr(video_source_obj, "status", "ERROR")
+                vs_detail = getattr(video_source_obj, "status_detail", "")
+
+                if vs_status == "RECONNECTING":
+                    # Show reconnecting overlay and keep the stream alive
+                    blank = np.zeros((480, 640, 3), dtype="uint8")
+                    cv2.putText(blank, "STREAM RECONNECTING...", (100, 220),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 255), 2)
+                    if vs_detail:
+                        cv2.putText(blank, vs_detail, (150, 260),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1)
+                    ret, buffer = cv2.imencode(".jpg", blank)
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                           + buffer.tobytes() + b"\r\n")
+                    continue
+                else:
+                    # Permanent failure or webcam/file ended
+                    print(f"[WARN] VideoSource ended "
+                          f"(status={vs_status}); stopping monitoring.")
+                    with _camera_lock:
+                        camera_running = False
+                        if current_source_type == SOURCE_STREAM:
+                            _stop_live_processing()
+                        video_source_obj.release()
+                        video_source_obj = None
+                        cap = None
+                    continue
+
+        elif cap is not None:
+            # Legacy fallback path (video_source.py not loaded)
+            try:
+                success, frame = cap.read()
+            except Exception as e:
+                print(f"[WARN] camera read failed: {e}")
+                success = False
+                frame = None
+
+            if not success or frame is None:
+                print("[WARN] camera disconnected; stopping monitoring.")
+                with _camera_lock:
+                    camera_running = False
+                    if cap is not None:
+                        cap.release()
+                        cap = None
+                continue
+        else:
+            # No source object — just show offline
             with _camera_lock:
                 camera_running = False
-                if cap is not None:
-                    cap.release()
-                    cap = None
             continue
 
-        try:
-            frame = process_frame(frame)
-        except Exception as e:
-            # Never let a per-frame processing error kill the stream.
-            print(f"[WARN] frame processing error: {e}")
+        # --- Process and stream frame ---
+        if current_source_type == SOURCE_STREAM:
+            with _live_frame_lock:
+                _latest_camera_frame = frame.copy()
+            _submit_live_frame(frame)
+            processed_frame = _latest_live_output()
+            if processed_frame is not None:
+                frame = processed_frame
+        else:
+            with _live_frame_lock:
+                _latest_camera_frame = frame.copy()
+            try:
+                frame = process_frame(frame)
+            except Exception as e:
+                print(f"[WARN] frame processing error: {e}")
 
         ret, buffer = cv2.imencode(".jpg", frame)
         frame_bytes = buffer.tobytes()
-
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
 
 
@@ -1567,6 +1982,11 @@ def _risk_distribution():
 
 
 def _system_status():
+    vs_status = ""
+    vs_detail = ""
+    if video_source_obj is not None:
+        vs_status = getattr(video_source_obj, "status", "")
+        vs_detail = getattr(video_source_obj, "status_detail", "")
     return {
         "camera_running": camera_running,
         "models_loaded": models_loaded,
@@ -1577,6 +1997,12 @@ def _system_status():
         "verification_active": camera_running and models_loaded,
         "logging_active": os.path.exists("logs/alerts.txt") or os.path.isdir("logs"),
         "evidence_storage_active": os.path.isdir("evidence"),
+        # Video source info for UI/templates
+        "source_type": current_source_type,
+        "source_label": current_source_label,
+        "source_url": current_source_url,
+        "stream_status": vs_status,
+        "stream_status_detail": vs_detail,
     }
 
 
@@ -1677,31 +2103,34 @@ def api_zones():
 
 @app.route("/api/snapshot")
 def api_snapshot():
-    """A single still frame for the Zone Calibration panel to draw
-    over. Uses a live camera frame when available; otherwise returns
-    a blank labeled canvas at the standard 640x480 working resolution
-    so calibration is still possible before the camera is started."""
+    """Return the most recent frame already read by the live camera feed."""
 
     frame = None
+    deadline = time.time() + 1.5
+    while camera_running and time.time() < deadline:
+        with _live_frame_lock:
+            if _latest_camera_frame is not None:
+                frame = _latest_camera_frame.copy()
+                break
+        time.sleep(0.05)
 
-    if camera_running and cap is not None:
-        with _camera_lock:
-            try:
-                success, f = cap.read()
-                if success:
-                    frame = f
-            except Exception:
-                frame = None
-
+    frame_available = frame is not None
     if frame is None:
         frame = 255 * np.ones((480, 640, 3), dtype="uint8")
-        cv2.putText(frame, "Start the camera for a live snapshot", (40, 230),
+        message = (
+            "Start the camera for a live snapshot"
+            if not camera_running else
+            "Waiting for the camera frame..."
+        )
+        cv2.putText(frame, message, (40, 230),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (120, 120, 120), 2)
-        cv2.putText(frame, "Showing a blank 640x480 canvas for now", (40, 260),
+        cv2.putText(frame, "Refresh after the live feed is ready", (40, 260),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
 
     ret, buffer = cv2.imencode(".jpg", frame)
-    return Response(buffer.tobytes(), mimetype="image/jpeg")
+    response = Response(buffer.tobytes(), mimetype="image/jpeg")
+    response.headers["X-Camera-Frame"] = "available" if frame_available else "unavailable"
+    return response
 
 
 # ============================================================
@@ -1729,7 +2158,7 @@ def api_status():
         "risk_distribution": _risk_distribution(),
         "last_alert": last_alert,
         "active_event": normalize_event_record(active_event) if active_event else None,
-        "last_event_id": violation_history[-1]["id"] if violation_history else 0,
+        "last_event_id": active_event.get("id", 0) if active_event else 0,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         **status,
     })
@@ -1769,6 +2198,52 @@ def api_events():
             "high_risk": ctx["high_risk_count"],
         },
         "risk_distribution": ctx["risk_distribution"],
+    })
+
+
+
+# ============================================================
+# VIDEO SOURCE API
+# ============================================================
+
+@app.route("/api/cameras")
+def api_cameras():
+    """Returns the list of public demo camera presets from
+    config/cameras.json. Used by the frontend source selector
+    to populate the preset dropdown."""
+    cfg = load_cameras_config()
+    streams = [
+        {
+            "id": s.get("id", ""),
+            "name": s.get("name", ""),
+            "url": s.get("url", ""),
+            "format": s.get("format", ""),
+            "notes": s.get("notes", ""),
+            "fps_cap": s.get("fps_cap", 10),
+            "enabled": s.get("enabled", True),
+        }
+        for s in cfg.get("demo_streams", [])
+        if s.get("enabled", True)
+    ]
+    return jsonify({"streams": streams})
+
+
+@app.route("/api/source")
+def api_source():
+    """Returns the current video source state for the UI status panel."""
+    vs_info = {}
+    if video_source_obj is not None:
+        vs_info = video_source_obj.get_info() if hasattr(video_source_obj, "get_info") else {}
+    return jsonify({
+        "camera_running": camera_running,
+        "source_type": current_source_type,
+        "source_label": current_source_label,
+        "source_url": current_source_url if current_source_type != SOURCE_WEBCAM else "",
+        "stream_status": vs_info.get("status", "OFFLINE" if not camera_running else "LIVE"),
+        "stream_status_detail": vs_info.get("status_detail", ""),
+        "reconnect_count": vs_info.get("reconnect_count", 0),
+        "width": vs_info.get("width", 640),
+        "height": vs_info.get("height", 480),
     })
 
 

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -43,7 +43,7 @@
     </div>
 
     <nav class="sidebar-nav">
-      <div class="nav-section-title">MONITORING CONSOLE</div>
+      <div class="nav-section-title">MONITORING</div>
 
       <a class="nav-item active" href="#dashboard" data-section="dashboard">
         <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -158,6 +158,16 @@
           <span class="status-pulse-dot"></span>
           <span class="status-text" id="header-status-text">{{ 'SYSTEM ONLINE' if camera_running else 'SYSTEM OFFLINE' }}</span>
         </div>
+
+        <label class="theme-switcher" for="theme-select">
+          <span class="theme-switcher-icon" aria-hidden="true">&#9681;</span>
+          <span class="sr-only">Theme</span>
+          <select id="theme-select" aria-label="Select theme">
+            <option value="dark">Dark Mode</option>
+            <option value="light">Light Mode</option>
+            <option value="system">System Mode</option>
+          </select>
+        </label>
 
         <!-- Notification Bell -->
         <button class="header-icon-btn" id="notif-bell" title="High-Risk Alerts" aria-label="Notifications">
@@ -292,6 +302,54 @@
             </div>
           </div>
         </div>
+
+        <div class="overview-summary-grid">
+          <div class="overview-panel">
+            <div class="overview-panel-header">
+              <div>
+                <span class="panel-eyebrow">ACTIVITY LOG</span>
+                <h3 class="panel-title">Recent incidents</h3>
+              </div>
+              <a class="panel-link" href="#violations" data-section="violations">View all <span aria-hidden="true">&rarr;</span></a>
+            </div>
+            <div class="overview-incident-list">
+              {% for ev in recent_events[:5] %}
+              <a class="overview-incident-row" href="#violations" data-section="violations">
+                <span class="overview-incident-marker marker-{{ ev.category }}"></span>
+                <span class="overview-incident-main">
+                  <strong>{{ ev.violation }}</strong>
+                  <small class="mono-font">{{ ev.timestamp }} &middot; #{{ '%04d' % ev.id if ev.id is number else ev.id }}</small>
+                </span>
+                <span class="overview-risk risk-{{ 'high' if ev.risk >= 70 else ('medium' if ev.risk >= 40 else 'low') }}">{{ ev.risk }}</span>
+              </a>
+              {% else %}
+              <div class="overview-empty">No verified incidents recorded yet.</div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="overview-panel overview-health-panel">
+            <div class="overview-panel-header">
+              <div>
+                <span class="panel-eyebrow">SYSTEM READINESS</span>
+                <h3 class="panel-title">Current system status</h3>
+              </div>
+              <a class="panel-link" href="#system" data-section="system">Diagnostics <span aria-hidden="true">&rarr;</span></a>
+            </div>
+            <div class="overview-health-state">
+              <span class="health-state-dot {{ 'online' if camera_running else 'offline' }}"></span>
+              <div>
+                <strong id="overview-health-title">{{ 'Camera and verification online' if camera_running else 'Camera ready to start' }}</strong>
+                <span id="overview-health-detail">{{ source_label if camera_running and source_label else 'No active camera source' }}</span>
+              </div>
+            </div>
+            <div class="overview-health-metrics">
+              <div><span>Camera</span><strong id="overview-camera-state">{{ 'ONLINE' if camera_running else 'OFFLINE' }}</strong></div>
+              <div><span>Verification</span><strong id="overview-verification-state">{{ 'ACTIVE' if camera_running else 'STANDBY' }}</strong></div>
+              <div><span>Polling</span><strong>2 SEC</strong></div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- ==================================================== -->
@@ -306,6 +364,61 @@
           <div class="stream-channel-badge">FEED ID: CAM-01 (TERMINAL)</div>
         </div>
 
+
+        <!-- VIDEO SOURCE SELECTOR -->
+        <div class="source-selector-panel" id="source-selector-panel">
+          <div class="source-panel-header">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>
+            <span>Video Source Configuration</span>
+            <span class="source-status-pill" id="source-status-pill">
+              {% if camera_running %}<span class="pill-dot pill-dot-live"></span>{{ source_label if source_label else "LIVE" }}{% else %}<span class="pill-dot pill-dot-idle"></span>NOT CONNECTED{% endif %}
+            </span>
+          </div>
+          <div class="source-type-tabs">
+            <button class="source-tab {% if not camera_running or source_type == 'webcam' %}active{% endif %}" data-source="webcam" id="tab-webcam">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"></path><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+              Laptop Camera
+            </button>
+            <button class="source-tab {% if camera_running and source_type == 'file' %}active{% endif %}" data-source="file" id="tab-file">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+              Local Video
+            </button>
+            <button class="source-tab {% if camera_running and source_type == 'stream' %}active{% endif %}" data-source="stream" id="tab-stream">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path></svg>
+              Public Live CCTV
+            </button>
+          </div>
+          <div class="source-input-panel" id="panel-webcam">
+            <div class="source-info-text">Uses your laptop or USB webcam (device index 0).</div>
+          </div>
+          <div class="source-input-panel hidden" id="panel-file">
+            <label class="source-input-label">Local Video File Path</label>
+            <input type="text" class="source-url-input" id="file-path-input" placeholder="e.g. C:\videos\traffic.mp4">
+            <div class="source-info-text">Supported: MP4, AVI, MOV, MKV — any file OpenCV can read.</div>
+          </div>
+          <div class="source-input-panel hidden" id="panel-stream">
+            <label class="source-input-label">Public Camera Preset</label>
+            <select class="source-preset-select" id="stream-preset-select"><option value="">— Loading… —</option></select>
+            <label class="source-input-label" style="margin-top:10px;">Stream URL <span class="label-hint">(HLS .m3u8 / MJPEG / RTSP)</span></label>
+            <input type="text" class="source-url-input" id="stream-url-input" placeholder="https://example.com/live.m3u8">
+            <div class="stream-legal-notice">&#x26A0; Only use intentionally public streams you are authorized to access.</div>
+            <div class="source-info-text" id="stream-preset-notes"></div>
+          </div>
+          <div class="source-controls-row">
+            <button class="btn-action btn-primary" id="btn-source-start" {% if camera_running %}disabled{% endif %}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <span>Start Monitoring</span>
+            </button>
+            <button class="btn-action btn-danger" id="btn-source-stop" {% if not camera_running %}disabled{% endif %}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
+              <span>Stop</span>
+            </button>
+            <div class="source-connection-status" id="source-conn-status">
+              {% if camera_running %}<span class="conn-dot conn-live"></span><span id="conn-label">{{ source_label if source_label else "Camera" }} &mdash; LIVE</span>{% else %}<span class="conn-dot conn-idle"></span><span id="conn-label">Not connected</span>{% endif %}
+            </div>
+          </div>
+        </div>
+        <!-- / VIDEO SOURCE SELECTOR -->
         <div class="surveillance-grid">
 
           <!-- CCTV Video Container -->
@@ -498,7 +611,7 @@
         <div class="zone-editor-container">
           <!-- Canvas Overlay Area -->
           <div class="zone-canvas-stage">
-            <img id="zone-snapshot" src="{{ url_for('api_snapshot') }}" alt="Camera Frame for Polygon Calibration">
+            <img id="zone-snapshot" alt="Camera Frame for Polygon Calibration">
             <canvas id="zone-canvas"></canvas>
             <div class="canvas-crosshair-badge">CLICK TO PLOT VERTICES (MINIMUM 3)</div>
           </div>
@@ -619,6 +732,8 @@
 <!-- Initial Server Data Seeding -->
 <script>
   window.__INITIAL_EVENT_ID__ = {{ (active_event.id if active_event else 0) | tojson }};
+  window.__INITIAL_SOURCE_TYPE__ = {{ source_type | default('webcam') | tojson }};
+  window.__INITIAL_SOURCE_LABEL__ = {{ source_label | default('') | tojson }};
   window.__INITIAL_ZONES__ = {
     trespass_zone: {{ trespass_zone | tojson }},
     no_parking_zone: {{ no_parking_zone | tojson }}

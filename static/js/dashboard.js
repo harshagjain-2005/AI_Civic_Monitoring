@@ -1,4 +1,4 @@
-// ==========================================================
+﻿// ==========================================================
 // CivicGuard AI — Security Operations Center UI Controller
 // ==========================================================
 //
@@ -27,45 +27,116 @@
   let currentSearchQuery = "";
 
   /* ==========================================================
+     Theme selection and persistence
+     ========================================================== */
+
+  const themeSelect = document.getElementById("theme-select");
+  const themeStorageKey = "civicguard-theme";
+  const validThemes = ["dark", "light", "system"];
+
+  function refreshChartsForTheme() {
+    const data = document.getElementById("chart-data");
+    if (!data) return;
+    renderCharts(
+      Number(data.dataset.garbage || 0),
+      Number(data.dataset.trespass || 0),
+      Number(data.dataset.noparking || 0),
+      Number(data.dataset.riskLow || 0),
+      Number(data.dataset.riskMedium || 0),
+      Number(data.dataset.riskHigh || 0)
+    );
+  }
+
+  function applyTheme(theme, persist = false) {
+    const selectedTheme = validThemes.includes(theme) ? theme : "dark";
+    document.body.classList.remove("theme-dark", "theme-light", "theme-system");
+    document.body.classList.add(`theme-${selectedTheme}`);
+    if (themeSelect) themeSelect.value = selectedTheme;
+    if (persist) {
+      try {
+        localStorage.setItem(themeStorageKey, selectedTheme);
+      } catch (error) {
+        // Theme selection still applies when browser storage is unavailable.
+      }
+    }
+    requestAnimationFrame(refreshChartsForTheme);
+  }
+
+  let savedTheme = "dark";
+  try {
+    savedTheme = localStorage.getItem(themeStorageKey) || "dark";
+  } catch (error) {
+    savedTheme = "dark";
+  }
+  applyTheme(savedTheme);
+
+  if (themeSelect) {
+    themeSelect.addEventListener("change", () => applyTheme(themeSelect.value, true));
+  }
+
+  const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
+  if (systemThemeQuery.addEventListener) {
+    systemThemeQuery.addEventListener("change", () => {
+      if (document.body.classList.contains("theme-system")) refreshChartsForTheme();
+    });
+  }
+
+  /* ==========================================================
      1. Navigation, Scrollspy & Header Breadcrumbs
      ========================================================== */
 
-  const navItems = Array.from(document.querySelectorAll(".nav-item, .nav-link"));
+  const navItems = Array.from(document.querySelectorAll(".nav-item"));
+  const sectionLinks = Array.from(document.querySelectorAll("[data-section]"));
   const headerSectionName = document.getElementById("header-section-name");
+  const sections = new Map(
+    navItems.map((item) => {
+      const sectionId = item.dataset.section;
+      const target = sectionId ? document.getElementById(sectionId) : null;
+      return target ? [sectionId, { item, target, title: item.querySelector(".nav-text")?.textContent.trim() || "" }] : null;
+    }).filter(Boolean)
+  );
 
-  const sectionMap = navItems.map((item) => {
-    const href = item.getAttribute("href");
-    if (!href || !href.startsWith("#")) return null;
-    const target = document.querySelector(href);
-    return target ? { item, target, title: item.querySelector(".nav-text")?.textContent.trim() || "" } : null;
-  }).filter(Boolean);
+  function showSection(sectionId, updateHash = true) {
+    const entry = sections.get(sectionId) || sections.get("dashboard");
+    if (!entry) return;
 
-  function updateActiveNav() {
-    const scrollPos = window.scrollY + 140;
-    let current = sectionMap[0];
-
-    sectionMap.forEach((entry) => {
-      if (entry.target.offsetTop <= scrollPos) {
-        current = entry;
-      }
+    sections.forEach(({ item, target, title }, id) => {
+      const active = id === sectionId || (sectionId !== entry.target.id && id === "dashboard" && entry.target.id === "dashboard");
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-current", active ? "page" : "false");
+      target.classList.toggle("active", id === entry.target.id);
+      if (active && headerSectionName) headerSectionName.textContent = title;
     });
 
-    if (current) {
-      navItems.forEach((el) => el.classList.remove("active"));
-      current.item.classList.add("active");
-      if (headerSectionName && current.title) {
-        headerSectionName.textContent = current.title;
-      }
+    if (updateHash && window.location.hash !== `#${entry.target.id}`) {
+      history.replaceState(null, "", `#${entry.target.id}`);
+    }
+
+    if (entry.target.id === "analytics") {
+      requestAnimationFrame(() => {
+        if (barChartInstance) barChartInstance.resize();
+        if (riskChartInstance) riskChartInstance.resize();
+      });
     }
   }
 
-  window.addEventListener("scroll", updateActiveNav, { passive: true });
-  updateActiveNav();
+  const initialSection = window.location.hash.slice(1);
+  showSection(sections.has(initialSection) ? initialSection : "dashboard", false);
 
-  navItems.forEach((item) => {
-    item.addEventListener("click", () => {
-      setTimeout(updateActiveNav, 50);
+  sectionLinks.forEach((link) => {
+    link.addEventListener("click", (event) => {
+      const sectionId = link.dataset.section;
+      if (!sections.has(sectionId)) return;
+      event.preventDefault();
+      showSection(sectionId);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     });
+  });
+
+  window.addEventListener("hashchange", () => {
+    const sectionId = window.location.hash.slice(1);
+    showSection(sections.has(sectionId) ? sectionId : "dashboard", false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
 
   /* ==========================================================
@@ -223,16 +294,23 @@
   function renderCharts(garbage, trespass, noparking, riskLow, riskMedium, riskHigh) {
     if (!window.Chart) return;
 
+    const styles = getComputedStyle(document.body);
+    const themeColor = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
     const colors = {
-      garbage: "#f59e0b",
-      trespass: "#f43f5e",
-      noparking: "#3b82f6",
-      low: "#10b981",
-      medium: "#f59e0b",
-      high: "#f43f5e",
+      garbage: themeColor("--garbage", "#f59e0b"),
+      trespass: themeColor("--trespass", "#f43f5e"),
+      noparking: themeColor("--noparking", "#3b82f6"),
+      low: themeColor("--online", "#10b981"),
+      medium: themeColor("--garbage", "#f59e0b"),
+      high: themeColor("--trespass", "#f43f5e"),
     };
 
-    Chart.defaults.color = "#94a3b8";
+    const chartText = themeColor("--text-secondary", "#94a3b8");
+    const chartSurface = themeColor("--surface-panel", "#0d131f");
+    const chartBorder = themeColor("--border-medium", "#222e44");
+    const chartGrid = themeColor("--border-subtle", "#192233");
+
+    Chart.defaults.color = chartText;
     Chart.defaults.font.family = "'JetBrains Mono', monospace";
     Chart.defaults.font.size = 11;
 
@@ -261,8 +339,8 @@
           plugins: {
             legend: { display: false },
             tooltip: {
-              backgroundColor: "#0d131f",
-              borderColor: "#222e44",
+              backgroundColor: chartSurface,
+              borderColor: chartBorder,
               borderWidth: 1,
               padding: 10,
               titleFont: { family: "'Space Grotesk', sans-serif", size: 12 },
@@ -272,14 +350,14 @@
           scales: {
             x: {
               grid: { display: false },
-              border: { color: "#192233" },
+              border: { color: chartGrid },
               ticks: { font: { weight: "600" } },
             },
             y: {
               beginAtZero: true,
               ticks: { precision: 0 },
-              grid: { color: "#131b29" },
-              border: { color: "#192233" },
+              grid: { color: chartGrid },
+              border: { color: chartGrid },
             },
           },
         },
@@ -306,8 +384,8 @@
           plugins: {
             legend: { display: false },
             tooltip: {
-              backgroundColor: "#0d131f",
-              borderColor: "#222e44",
+              backgroundColor: chartSurface,
+              borderColor: chartBorder,
               borderWidth: 1,
               padding: 10,
               titleFont: { family: "'Space Grotesk', sans-serif", size: 12 },
@@ -318,12 +396,12 @@
             x: {
               beginAtZero: true,
               ticks: { precision: 0 },
-              grid: { color: "#131b29" },
-              border: { color: "#192233" },
+              grid: { color: chartGrid },
+              border: { color: chartGrid },
             },
             y: {
               grid: { display: false },
-              border: { color: "#192233" },
+              border: { color: chartGrid },
               ticks: { font: { weight: "600" } },
             },
           },
@@ -430,6 +508,24 @@
       metaDetection.textContent = cameraRunning ? "PROCESSING" : "STANDBY";
       metaDetection.className = `tag-val ${cameraRunning ? "val-online" : "val-offline"}`;
     }
+
+    const overviewDot = document.querySelector(".health-state-dot");
+    const overviewTitle = document.getElementById("overview-health-title");
+    const overviewDetail = document.getElementById("overview-health-detail");
+    const overviewCamera = document.getElementById("overview-camera-state");
+    const overviewVerification = document.getElementById("overview-verification-state");
+    if (overviewDot) {
+      overviewDot.classList.toggle("online", cameraRunning);
+      overviewDot.classList.toggle("offline", !cameraRunning);
+    }
+    if (overviewTitle) overviewTitle.textContent = cameraRunning
+      ? "Camera and verification online"
+      : "Camera ready to start";
+    if (overviewDetail) overviewDetail.textContent = cameraRunning
+      ? (window.__INITIAL_SOURCE_LABEL__ || "Active camera source")
+      : "No active camera source";
+    if (overviewCamera) overviewCamera.textContent = cameraRunning ? "ONLINE" : "OFFLINE";
+    if (overviewVerification) overviewVerification.textContent = cameraRunning ? "ACTIVE" : "STANDBY";
   }
 
   /* ==========================================================
@@ -565,6 +661,7 @@
 
       updateCounts(data.counts);
       updateLiveStatus(data.camera_running);
+      if (typeof window.updateSourceStatus === "function") window.updateSourceStatus(data);
 
       if (data.last_event_id && data.last_event_id !== lastSeenEventId) {
         lastSeenEventId = data.last_event_id;
@@ -594,6 +691,7 @@
     };
 
     let activeZone = "trespass_zone";
+    let snapshotReady = false;
 
     const zoneColors = {
       trespass_zone: "rgba(244, 63, 94, 0.9)",
@@ -605,10 +703,12 @@
     };
 
     function sizeCanvasToImage() {
-      canvas.width = snapshotImg.naturalWidth || snapshotImg.width || 640;
-      canvas.height = snapshotImg.naturalHeight || snapshotImg.height || 480;
+      if (!snapshotImg.naturalWidth || !snapshotImg.naturalHeight) return;
+      canvas.width = snapshotImg.naturalWidth;
+      canvas.height = snapshotImg.naturalHeight;
       canvas.style.width = snapshotImg.clientWidth + "px";
       canvas.style.height = snapshotImg.clientHeight + "px";
+      snapshotReady = true;
       redraw();
     }
 
@@ -647,21 +747,20 @@
       statusEl.style.color = isError ? "var(--trespass)" : "var(--online)";
     }
 
-    if (snapshotImg.complete && snapshotImg.naturalWidth) {
-      sizeCanvasToImage();
-    }
-    snapshotImg.addEventListener("load", sizeCanvasToImage);
     window.addEventListener("resize", () => {
-      canvas.style.width = snapshotImg.clientWidth + "px";
-      canvas.style.height = snapshotImg.clientHeight + "px";
+      if (snapshotReady) sizeCanvasToImage();
     });
 
     canvas.addEventListener("click", (e) => {
+      if (!snapshotReady) {
+        setStatus("Camera snapshot is unavailable. Start the camera and refresh.", true);
+        return;
+      }
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
-      const x = Math.round((e.clientX - rect.left) * scaleX);
-      const y = Math.round((e.clientY - rect.top) * scaleY);
+      const x = Math.max(0, Math.min(canvas.width - 1, Math.round((e.clientX - rect.left) * scaleX)));
+      const y = Math.max(0, Math.min(canvas.height - 1, Math.round((e.clientY - rect.top) * scaleY)));
 
       zonePoints[activeZone].push([x, y]);
       redraw();
@@ -711,17 +810,42 @@
       });
     }
 
-    if (btnRefresh) {
-      btnRefresh.addEventListener("click", () => {
-        snapshotImg.src = "/api/snapshot?ts=" + Date.now();
-        setStatus("Camera frame refreshed.");
-      });
+    async function loadSnapshot(statusMessage) {
+      setStatus(statusMessage);
+      snapshotReady = false;
+      try {
+        const res = await fetch("/api/snapshot?ts=" + Date.now(), { cache: "no-store" });
+        if (!res.ok || res.headers.get("X-Camera-Frame") !== "available") {
+          throw new Error("Camera frame unavailable");
+        }
+        const blob = await res.blob();
+        if (!blob.size || !blob.type.startsWith("image/")) throw new Error("Invalid snapshot");
+        const nextUrl = URL.createObjectURL(blob);
+        snapshotImg.onload = () => {
+          URL.revokeObjectURL(nextUrl);
+          sizeCanvasToImage();
+          setStatus("Camera snapshot loaded.");
+        };
+        snapshotImg.src = nextUrl;
+      } catch (err) {
+        setStatus("Snapshot unavailable. Start the camera and try again.", true);
+      }
     }
+
+    if (btnRefresh) {
+      btnRefresh.addEventListener("click", () => loadSnapshot("Requesting a fresh camera snapshot..."));
+    }
+
+    loadSnapshot("Loading the current camera snapshot...");
 
     if (btnSave) {
       btnSave.addEventListener("click", async () => {
         if (zonePoints[activeZone].length < 3) {
           setStatus("A valid polygon requires at least 3 points.", true);
+          return;
+        }
+        if (!snapshotReady) {
+          setStatus("Load a valid camera snapshot before saving polygon geometry.", true);
           return;
         }
 
@@ -744,6 +868,255 @@
       });
     }
   })();
+
+
+  // ============================================================
+  // VIDEO SOURCE SELECTOR — Multi-Source Panel Logic
+  // ============================================================
+  (function initSourceSelector() {
+    "use strict";
+
+    // DOM references
+    const tabs          = document.querySelectorAll(".source-tab");
+    const panels        = document.querySelectorAll(".source-input-panel");
+    const btnStart      = document.getElementById("btn-source-start");
+    const btnStop       = document.getElementById("btn-source-stop");
+    const presetSelect  = document.getElementById("stream-preset-select");
+    const streamUrlInp  = document.getElementById("stream-url-input");
+    const filePathInp   = document.getElementById("file-path-input");
+    const connLabel     = document.getElementById("conn-label");
+    const connStatus    = document.getElementById("source-conn-status");
+    const statusPill    = document.getElementById("source-status-pill");
+    const presetNotes   = document.getElementById("stream-preset-notes");
+
+    // If the source selector panel is not in the DOM (template variation), bail.
+    if (!btnStart || !btnStop) return;
+
+    // ── Active tab tracking ──────────────────────────────────
+    let activeSource = (window.__INITIAL_SOURCE_TYPE__ || "webcam");
+
+    function showTab(type) {
+      activeSource = type;
+      tabs.forEach(t => {
+        t.classList.toggle("active", t.dataset.source === type);
+      });
+      panels.forEach(p => {
+        const match = p.id === "panel-" + type;
+        p.classList.toggle("hidden", !match);
+      });
+    }
+
+    tabs.forEach(tab => {
+      tab.addEventListener("click", () => showTab(tab.dataset.source));
+    });
+
+    // Initialise to server-rendered source type
+    showTab(activeSource);
+
+    // ── Load camera presets from /api/cameras ────────────────
+    function loadPresets() {
+      if (!presetSelect) return;
+      fetch("/api/cameras")
+        .then(r => r.json())
+        .then(data => {
+          presetSelect.innerHTML = "";
+          const cameras = data.cameras || [];
+          cameras.forEach(cam => {
+            const opt = document.createElement("option");
+            opt.value      = cam.url || "";
+            opt.textContent = cam.name || cam.id || "Camera";
+            opt.dataset.fpsCap = cam.fps_cap || 10;
+            opt.dataset.notes  = cam.notes  || cam.description || "";
+            if (!cam.url) {
+              opt.dataset.custom = "true";
+              opt.textContent += " (Custom URL)";
+            }
+            presetSelect.appendChild(opt);
+          });
+          // Add a blank custom entry at the end
+          const customOpt = document.createElement("option");
+          customOpt.value = "";
+          customOpt.textContent = "— Custom URL —";
+          customOpt.dataset.custom = "true";
+          presetSelect.appendChild(customOpt);
+        })
+        .catch(() => {
+          if (presetSelect) presetSelect.innerHTML = "<option value=''>— Could not load presets —</option>";
+        });
+    }
+
+    // ── Preset selection: auto-fill URL field ────────────────
+    if (presetSelect) {
+      presetSelect.addEventListener("change", () => {
+        const opt = presetSelect.options[presetSelect.selectedIndex];
+        if (!opt) return;
+        if (streamUrlInp) {
+          streamUrlInp.value = opt.value || "";
+          if (!opt.value) streamUrlInp.focus();
+        }
+        if (presetNotes) {
+          presetNotes.textContent = opt.dataset.notes || "";
+        }
+      });
+    }
+
+    loadPresets();
+
+    // ── UI state helper ──────────────────────────────────────
+    function setUIState(running, label, dotClass) {
+      dotClass = dotClass || (running ? "conn-live" : "conn-idle");
+      if (btnStart) btnStart.disabled = running;
+      if (btnStop)  btnStop.disabled  = !running;
+
+      if (connStatus) {
+        const dot = connStatus.querySelector(".conn-dot");
+        if (dot) {
+          dot.className = "conn-dot " + dotClass;
+        }
+      }
+      if (connLabel) {
+        connLabel.textContent = label;
+      }
+      if (statusPill) {
+        const dot = statusPill.querySelector(".pill-dot");
+        if (dot) {
+          dot.className = "pill-dot " + (running ? "pill-dot-live" : "pill-dot-idle");
+        }
+        const txt = statusPill.childNodes[statusPill.childNodes.length - 1];
+        if (txt && txt.nodeType === Node.TEXT_NODE) {
+          txt.textContent = running ? (" " + label) : " NOT CONNECTED";
+        } else {
+          // fallback: set pill innerHTML
+          statusPill.innerHTML = running
+            ? '<span class="pill-dot pill-dot-live"></span> ' + label
+            : '<span class="pill-dot pill-dot-idle"></span> NOT CONNECTED';
+        }
+      }
+    }
+
+    // ── START button ─────────────────────────────────────────
+    if (btnStart) {
+      btnStart.addEventListener("click", async () => {
+        let sourceType = activeSource;
+        let sourceUrl  = "";
+        let cameraName = "";
+        let fpsCap     = 10;
+
+        if (sourceType === "file") {
+          sourceUrl  = filePathInp ? filePathInp.value.trim() : "";
+          cameraName = "Local Video";
+          fpsCap     = 30;
+          if (!sourceUrl) {
+            alert("Please enter a local video file path.");
+            return;
+          }
+        } else if (sourceType === "stream") {
+          sourceUrl = streamUrlInp ? streamUrlInp.value.trim() : "";
+          if (!sourceUrl && presetSelect) {
+            sourceUrl = presetSelect.value;
+          }
+          if (!sourceUrl) {
+            alert("Please enter or select a stream URL.");
+            return;
+          }
+          const selOpt = presetSelect && presetSelect.options[presetSelect.selectedIndex];
+          cameraName = (selOpt && selOpt.textContent && !selOpt.dataset.custom)
+            ? selOpt.textContent.trim()
+            : "Public CCTV";
+          fpsCap = (selOpt && selOpt.dataset.fpsCap) ? parseInt(selOpt.dataset.fpsCap, 10) : 10;
+        } else {
+          // webcam
+          sourceType = "webcam";
+          cameraName = "Laptop Camera";
+          fpsCap     = 30;
+        }
+
+        // Disable button while connecting
+        btnStart.disabled = true;
+        setUIState(false, "Connecting…", "conn-connecting");
+
+        try {
+          const params = new URLSearchParams({
+            source_type:  sourceType,
+            source_url:   sourceUrl,
+            camera_name:  cameraName,
+            fps_cap:      fpsCap,
+          });
+          const res  = await fetch("/start?" + params.toString(), { headers: { "Accept": "application/json" } });
+          const data = await res.json().catch(() => ({ ok: false }));
+
+          if (res.ok && data.ok !== false) {
+            setUIState(true, cameraName + " — LIVE", "conn-live");
+          } else {
+            const errMsg = (data && data.error) ? data.error : "Failed to start source.";
+            setUIState(false, errMsg, "conn-error");
+            btnStart.disabled = false;
+          }
+        } catch (err) {
+          setUIState(false, "Connection error", "conn-error");
+          btnStart.disabled = false;
+        }
+      });
+    }
+
+    // ── STOP button ──────────────────────────────────────────
+    if (btnStop) {
+      btnStop.addEventListener("click", async () => {
+        btnStop.disabled = true;
+        try {
+          await fetch("/stop", { headers: { "Accept": "application/json" } });
+        } catch (_) {}
+        setUIState(false, "Not connected", "conn-idle");
+        btnStart.disabled = false;
+      });
+    }
+
+    // ── Intercept legacy anchor Start/Stop to avoid page reload ─
+    const legacyStart = document.getElementById("btn-start-stream");
+    const legacyStop  = document.getElementById("btn-stop-stream");
+    if (legacyStart) {
+      legacyStart.addEventListener("click", e => {
+        e.preventDefault();
+        if (btnStart && !btnStart.disabled) btnStart.click();
+        else {
+          // fallback: navigate
+          window.location.href = legacyStart.href;
+        }
+      });
+    }
+    if (legacyStop) {
+      legacyStop.addEventListener("click", e => {
+        e.preventDefault();
+        if (btnStop && !btnStop.disabled) btnStop.click();
+        else {
+          window.location.href = legacyStop.href;
+        }
+      });
+    }
+
+    // ── Heartbeat integration: update source status ──────────
+    // Hook into the existing pollStatus() by patching updateLiveStatus
+    const _origUpdateLiveStatus = window.updateLiveStatus;
+    window.updateSourceStatus = function(statusData) {
+      if (!statusData) return;
+      const running     = !!statusData.camera_running;
+      const streamStat  = statusData.stream_status || (running ? "LIVE" : "OFFLINE");
+      const label       = statusData.source_label  || (running ? "Camera" : "Not connected");
+      let dotClass      = "conn-idle";
+
+      if (streamStat === "LIVE")          dotClass = "conn-live";
+      else if (streamStat === "CONNECTING" || streamStat === "RECONNECTING") dotClass = "conn-connecting";
+      else if (streamStat === "ERROR")    dotClass = "conn-error";
+
+      setUIState(running, running ? label + " — " + streamStat : "Not connected", dotClass);
+
+      // Sync active tab to actual running source
+      if (running && statusData.source_type) {
+        showTab(statusData.source_type);
+      }
+    };
+
+  })(); // end initSourceSelector
 
   // Kick off heartbeat polling loop
   setInterval(pollStatus, POLL_INTERVAL_MS);
