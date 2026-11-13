@@ -445,6 +445,8 @@
       "kpi-highrisk": counts.high_risk,
       "nav-violations-count": counts.total,
       "notif-badge": counts.high_risk,
+      "live-stat-events": counts.total,
+      "live-stat-risk": counts.high_risk,
     };
 
     Object.entries(countMap).forEach(([id, val]) => {
@@ -533,6 +535,8 @@
      ========================================================== */
 
   function riskTierClass(risk) {
+    // Severity bands match the existing risk distribution: low < 40,
+    // medium 40-69, and high >= 70.
     if (risk >= 70) return "risk-high";
     if (risk >= 40) return "risk-medium";
     return "risk-low";

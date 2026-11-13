@@ -476,6 +476,23 @@
                 </div>
               </div>
             </div>
+
+            <div class="live-telemetry-strip" aria-label="Live monitoring telemetry">
+              <div><span class="telemetry-strip-label">Verified events</span><strong id="live-stat-events">{{ total_violations }}</strong></div>
+              <div><span class="telemetry-strip-label">High risk</span><strong id="live-stat-risk">{{ high_risk_count }}</strong></div>
+              <div><span class="telemetry-strip-label">AI inference</span><strong>{{ 'RUNNING' if camera_running and models_loaded else 'STANDBY' }}</strong></div>
+              <div><span class="telemetry-strip-label">Active zones</span><strong>2 ACTIVE</strong></div>
+            </div>
+
+            <ol class="pipeline-stepper" aria-label="Verification pipeline">
+              <li class="{{ 'is-complete' if camera_running and models_loaded else 'is-pending' }}"><span>01</span>Detected</li>
+              <li class="is-pending"><span>02</span>Tracked</li>
+              <li class="is-pending"><span>03</span>Zone interaction</li>
+              <li class="{{ 'is-complete' if active_event else 'is-pending' }}"><span>04</span>Persistence verified</li>
+              <li class="{{ 'is-complete' if active_event else 'is-pending' }}"><span>05</span>Violation confirmed</li>
+              <li class="{{ 'is-complete' if active_event and active_event.evidence else 'is-pending' }}"><span>06</span>Evidence captured</li>
+              <li class="{{ 'is-complete' if active_event and active_event.evidence else 'is-pending' }}"><span>07</span>Stored</li>
+            </ol>
           </div>
 
           <!-- Active Incident & Verification Panel -->
